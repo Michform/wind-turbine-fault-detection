@@ -1,71 +1,97 @@
-"""
-04_RNN_benchmark.py
-===================
-SYSTEMATIC RNN COMPARISON: 9 architectures, 5-run protocol.
-Compatible with: TF 2.19.1 | Keras 3.13.2 | NumPy 2.0.2
+import os
+os.environ["TF_USE_LEGACY_KERAS"] = "1"
 
-Keras 3 changes:
-    - keras.backend (K.*) replaced with tf.* ops in AttentionLayer
-    - Imports use keras directly instead of tensorflow.keras
+"""
+04_RNN_Benchmark.py
+===================
+SYSTEMATIC RNN COMPARISON: 9 architectures, 5 runs each.
+
+Models compared:
+    1. Vanilla SimpleRNN       — baseline, expected to struggle (vanishing gradients)
+    2. GRU                     — single layer, gating solves vanishing gradient
+    3. 2-Layer GRU             — deeper temporal modeling
+    4. BiGRU                   — bidirectional: reads sequence forward AND backward
+    5. LSTM                    — explicit memory cell, handles long dependencies
+    6. 2-Layer LSTM            — deeper LSTM
+    7. BiLSTM                  — bidirectional LSTM
+    8. LSTM + Attention        — custom attention weights key timesteps
+    9. GRU  + Attention        — (best performing pure-RNN model)
+
+Evaluation Protocol:
+    Each model trained 5 times with different random splits.
+    Best run selected for detailed analysis (confusion matrix + report).
+    Boxplot shows accuracy variance across runs — more informative than
+    a single accuracy number, which can be lucky or unlucky.
+
+Why Vanilla RNN fails:
+    With sequences of length 1000, standard RNNs suffer from vanishing
+    gradients — the gradient signal diminishes exponentially as it
+    backpropagates through 1000 time steps. GRU/LSTM solve this with
+    gating mechanisms that preserve gradient flow.
+
+Key finding:
+    GRU+Attention: ~97% best accuracy
+    CNN (notebook 03): ~99.82%
+    → CNNs win on vibration data because fault signatures are
+      local patterns in frequency/time, not long-range dependencies.
 """
 
 import sys, os
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 
 import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
 import gc
+
 import tensorflow as tf
-import keras
-from keras.models import Model, Sequential
-from keras.layers import (Input, SimpleRNN, LSTM, GRU, Dense,
-                          Dropout, BatchNormalization, Bidirectional, Layer)
-from keras.optimizers import Adam
-from keras.utils import to_categorical
-from keras.callbacks import EarlyStopping
+from tensorflow.keras.models import Model, Sequential
+from tensorflow.keras.layers import (Input, SimpleRNN, LSTM, GRU, Dense, Dropout,
+                                     BatchNormalization, Bidirectional, Layer,
+                                     Conv1D, MaxPooling1D)
+from tensorflow.keras.optimizers import Adam
+from tensorflow.keras.utils import to_categorical
+from tensorflow.keras.callbacks import EarlyStopping
+import tensorflow.keras.backend as K
 from sklearn.model_selection import train_test_split
+from sklearn.metrics import classification_report, confusion_matrix
 
 from utils.data_utils import load_data, to_rnn_input
-from utils.eval_utils import (evaluate_model, plot_training_history,
-                               run_attention_suite, compare_models_boxplot,
-                               print_summary_table, save_summary_csv, FAULT_LABELS)
+from utils.eval_utils import compare_models_boxplot, FAULT_LABELS
 
 # ── Configuration ────────────────────────────────────────────────────
-MAT_PATH     = os.path.join(os.path.dirname(__file__), '..', 'Turbine.mat')
-SAVE_DIR     = os.path.join(os.path.dirname(__file__), 'outputs')
-N_RUNS       = 5
-EPOCHS       = 100
-BATCH_SIZE   = 128
+MAT_PATH   = 'Turbine.mat'
+N_RUNS     = 5
+EPOCHS     = 100
+BATCH_SIZE = 128
 RANDOM_STATE = 42
 
-os.makedirs(SAVE_DIR, exist_ok=True)
-summary_results    = []
-all_run_accuracies = {}
-
-print("=" * 60)
-print("  04 - RNN BENCHMARK")
-print("=" * 60)
+os.makedirs('outputs', exist_ok=True)
 
 # ── Step 1: Load Data ─────────────────────────────────────────────────
-print("Step 1: Loading data...")
 X_raw, Y_onehot, y_int = load_data(MAT_PATH, normalize=True)
-X = to_rnn_input(X_raw)   # (14000, 1000, 3)
+X = to_rnn_input(X_raw)   # shape: (14000, 1000, 3)
 
-X_all, X_test, yi_all, yi_test = train_test_split(
+# Fixed test set (stratified) — never touched during training loops
+X_trainval, X_test, yi_trainval, yi_test = train_test_split(
     X, y_int, test_size=0.2, stratify=y_int, random_state=RANDOM_STATE
 )
-# Keep raw test subset for attention plotting
-X_raw_all, X_raw_test, _, _ = train_test_split(
-    X_raw, y_int, test_size=0.2, stratify=y_int, random_state=RANDOM_STATE
-)
 y_test_cat = to_categorical(yi_test, num_classes=7)
-print(f"  Training pool: {len(X_all)}  |  Test set: {len(X_test)}")
 
 
-# ── Step 2: Custom Attention Layer (Keras 3 compatible) ───────────────
+# ── Step 2: Custom Attention Layer ───────────────────────────────────
 class AttentionLayer(Layer):
     """
-    Additive (Bahdanau-style) attention for sequence classification.
-    Updated for Keras 3: uses tf.* ops instead of keras.backend.
+    Additive (Bahdanau-style) attention.
+    Learns to weight each timestep's hidden state by its relevance.
+    For vibration fault detection: focuses on the time windows where
+    fault signatures are most prominent.
+
+    Mechanism:
+        e_t = tanh(h_t @ W + b)     # score for each timestep
+        a_t = softmax(e_t)           # normalize to weights
+        context = sum(h_t * a_t)     # weighted sum of hidden states
     """
     def build(self, input_shape):
         self.W = self.add_weight(
@@ -79,19 +105,19 @@ class AttentionLayer(Layer):
         super().build(input_shape)
 
     def call(self, x):
-        # x shape: (batch, T, units)
-        e      = tf.nn.tanh(tf.matmul(x, self.W) + self.b)  # (batch, T, 1)
-        a      = tf.nn.softmax(e, axis=1)                     # attention weights
-        output = x * a                                         # weighted states
-        return tf.reduce_sum(output, axis=1)                   # context vector
-
-    def get_config(self):
-        return super().get_config()
+        e = K.tanh(K.dot(x, self.W) + self.b)
+        a = K.softmax(e, axis=1)
+        output = x * a
+        return K.sum(output, axis=1)
 
 
 # ── Step 3: Model Builders ────────────────────────────────────────────
 
 def build_vanilla_rnn():
+    """
+    SimpleRNN — included to demonstrate why gating is necessary.
+    Expected accuracy: low (~50-70%) due to vanishing gradients over 1000 steps.
+    """
     return Sequential([
         SimpleRNN(64, input_shape=(1000, 3)),
         Dense(7, activation='softmax')
@@ -145,120 +171,167 @@ def build_bilstm():
 
 def build_lstm_attention():
     inp = Input(shape=(1000, 3))
-    x   = LSTM(128, return_sequences=True)(inp)
-    x   = BatchNormalization()(x)
-    x   = Dropout(0.3)(x)
-    x   = AttentionLayer()(x)
+    x = LSTM(128, return_sequences=True)(inp)
+    x = BatchNormalization()(x)
+    x = Dropout(0.3)(x)
+    x = AttentionLayer()(x)
     out = Dense(7, activation='softmax')(x)
     return Model(inp, out)
 
 def build_gru_attention():
     inp = Input(shape=(1000, 3))
-    x   = GRU(128, return_sequences=True)(inp)
-    x   = BatchNormalization()(x)
-    x   = Dropout(0.3)(x)
-    x   = AttentionLayer()(x)
+    x = GRU(128, return_sequences=True)(inp)
+    x = BatchNormalization()(x)
+    x = Dropout(0.3)(x)
+    x = AttentionLayer()(x)
     out = Dense(7, activation='softmax')(x)
     return Model(inp, out)
 
 
-MODEL_REGISTRY = {
-    'Vanilla RNN':    (build_vanilla_rnn,    1,      False),
-    'GRU':            (build_gru,            N_RUNS, False),
-    '2-Layer GRU':    (build_gru_2layer,     N_RUNS, False),
-    'BiGRU':          (build_bigru,          N_RUNS, False),
-    'LSTM':           (build_lstm,           N_RUNS, False),
-    '2-Layer LSTM':   (build_lstm_2layer,    N_RUNS, False),
-    'BiLSTM':         (build_bilstm,         N_RUNS, False),
-    'LSTM+Attention': (build_lstm_attention, N_RUNS, True),
-    'GRU+Attention':  (build_gru_attention,  N_RUNS, True),
+MODEL_BUILDERS = {
+    'Vanilla RNN':      build_vanilla_rnn,
+    'GRU':              build_gru,
+    '2-Layer GRU':      build_gru_2layer,
+    'BiGRU':            build_bigru,
+    'LSTM':             build_lstm,
+    '2-Layer LSTM':     build_lstm_2layer,
+    'BiLSTM':           build_bilstm,
+    'LSTM+Attention':   build_lstm_attention,
+    'GRU+Attention':    build_gru_attention,
 }
 
 
-# ── Step 4: Training & Inline Evaluation Loop ─────────────────────────
-print("Step 2: Training all 9 RNN architectures...\n")
+# ── Step 4: Training & Evaluation Loop ───────────────────────────────
+results       = []
+test_accs     = {}
+best_histories = {}
+best_cms       = {}
+best_preds     = {}
 
-for model_name, (builder, n_runs, has_attention) in MODEL_REGISTRY.items():
-    print(f"\n{'='*60}\n  MODEL: {model_name}  ({n_runs} run{'s' if n_runs>1 else ''})\n{'='*60}")
+for name, builder in MODEL_BUILDERS.items():
+    print(f"\n{'─'*55}")
+    print(f"  Running: {name}  ({N_RUNS} runs)")
+    print(f"{'─'*55}")
 
-    if model_name == 'Vanilla RNN':
-        print("\n  NOTE: Expected ~50-70% due to vanishing gradients over 1000 steps.")
-        print("  Running 1 run only.\n")
+    run_accs  = []
+    best_acc  = 0
+    best_hist = None
+    best_pred = None
 
-    run_accs, best_acc, best_model, best_hist = [], 0, None, None
+    n_runs = 1 if name == 'Vanilla RNN' else N_RUNS  # Vanilla: 1 run (slow)
 
     for run in range(n_runs):
-        if n_runs > 1:
-            print(f"\n  Run {run+1}/{n_runs}")
-
-        keras.backend.clear_session()
+        tf.keras.backend.clear_session()
         gc.collect()
 
+        # Different random split each run → measures variance
         X_tr, _, yi_tr, _ = train_test_split(
-            X_all, yi_all, test_size=0.2, stratify=yi_all, random_state=run
+            X_trainval, yi_trainval,
+            test_size=0.2, random_state=run
         )
         y_tr = to_categorical(yi_tr, num_classes=7)
 
         m = builder()
         m.compile(optimizer=Adam(0.001),
-                  loss='categorical_crossentropy', metrics=['accuracy'])
+                  loss='categorical_crossentropy',
+                  metrics=['accuracy'])
 
+        es = EarlyStopping(monitor='val_loss', patience=10,
+                           restore_best_weights=True)
         hist = m.fit(
             X_tr, y_tr,
             validation_split=0.2,
-            epochs=EPOCHS, batch_size=BATCH_SIZE,
-            callbacks=[EarlyStopping(monitor='val_loss', patience=30,
-                                     restore_best_weights=True, verbose=0)],
-            verbose=1
+            epochs=EPOCHS,
+            batch_size=BATCH_SIZE,
+            callbacks=[es],
+            verbose=0
         )
 
         _, acc = m.evaluate(X_test, y_test_cat, verbose=0)
         run_accs.append(acc)
-        print(f"  Run {run+1}: {acc*100:.2f}%")
+        print(f"  Run {run+1}/{n_runs}: {acc:.4f}")
 
         if acc > best_acc:
-            best_acc, best_model, best_hist = acc, m, hist
+            best_acc  = acc
+            best_hist = hist
+            best_pred = np.argmax(m.predict(X_test, verbose=0), axis=1)
 
-    all_run_accuracies[model_name] = run_accs
+        if acc >= 1.0:
+            break
 
-    print(f"\n  INLINE EVALUATION - {model_name} (best: {best_acc*100:.2f}%)")
-    plot_training_history(best_hist, model_name=model_name, save_dir=SAVE_DIR)
+    test_accs[name]      = run_accs
+    best_histories[name] = best_hist
+    best_cms[name]       = confusion_matrix(yi_test, best_pred)
+    best_preds[name]     = best_pred
 
-    final_acc, _ = evaluate_model(
-        model=best_model, X_test=X_test,
-        y_test_onehot=y_test_cat, y_test_int=yi_test,
-        model_name=model_name, save_dir=SAVE_DIR, is_branch_input=False
+    results.append({
+        'Model':        name,
+        'Best_Acc':     best_acc,
+        'Mean_Acc':     np.mean(run_accs),
+        'Std_Acc':      np.std(run_accs),
+        'All_Accs':     run_accs
+    })
+    print(f"  ✅ Best: {best_acc:.4f}  |  Mean: {np.mean(run_accs):.4f} ± {np.std(run_accs):.4f}")
+
+
+# ── Step 5: Summary Table ─────────────────────────────────────────────
+df = pd.DataFrame([{k: v for k, v in r.items() if k != 'All_Accs'} for r in results])
+df = df.sort_values('Best_Acc', ascending=False).reset_index(drop=True)
+print("\n" + "="*55)
+print("  FINAL RESULTS SUMMARY")
+print("="*55)
+print(df.to_string(index=False))
+df.to_csv('outputs/rnn_results_summary.csv', index=False)
+
+# ── Step 6: Boxplot ───────────────────────────────────────────────────
+compare_models_boxplot(test_accs, save_dir='outputs')
+
+# ── Step 7: Per-Model Curves & Confusion Matrices ────────────────────
+for name in best_histories:
+    hist  = best_histories[name]
+    cm    = best_cms[name]
+    pred  = best_preds[name]
+
+    # Training curves
+    fig, axes = plt.subplots(1, 2, figsize=(13, 4))
+    fig.suptitle(f'{name} — Training History (Best Run)', fontweight='bold')
+    axes[0].plot(hist.history['accuracy'],     label='Train')
+    axes[0].plot(hist.history['val_accuracy'], label='Val', linestyle='--')
+    axes[0].set_title('Accuracy'); axes[0].legend(); axes[0].grid(True, alpha=0.3)
+    axes[1].plot(hist.history['loss'],     label='Train')
+    axes[1].plot(hist.history['val_loss'], label='Val', linestyle='--')
+    axes[1].set_title('Loss'); axes[1].legend(); axes[1].grid(True, alpha=0.3)
+    plt.tight_layout()
+    plt.savefig(f"outputs/{name.replace(' ','_')}_training_curves.png", dpi=150)
+    plt.show()
+
+    # Confusion matrix
+    plt.figure(figsize=(9, 7))
+    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues',
+                xticklabels=FAULT_LABELS, yticklabels=FAULT_LABELS)
+    plt.title(f'{name} — Confusion Matrix (Best Run)', fontweight='bold')
+    plt.xlabel('Predicted'); plt.ylabel('True')
+    plt.xticks(rotation=45, ha='right'); plt.tight_layout()
+    plt.savefig(f"outputs/{name.replace(' ','_')}_confusion_matrix.png", dpi=150)
+    plt.show()
+
+    # Classification report
+    print(f"\n{'─'*40}")
+    print(f"  {name} — Classification Report")
+    print(f"{'─'*40}")
+    print(classification_report(yi_test, pred, target_names=FAULT_LABELS))
+
+    # Save report and confusion matrix CSV (matches original kaggle.ipynb)
+    from sklearn.metrics import classification_report as cr
+    rep = cr(yi_test, pred, target_names=FAULT_LABELS, output_dict=True)
+    pd.DataFrame(rep).T.to_csv(
+        f"outputs/{name.replace(' ','_')}_classification_report.csv"
+    )
+    np.savetxt(
+        f"outputs/{name.replace(' ','_')}_confusion_matrix.csv",
+        cm, delimiter=',', fmt='%d'
     )
 
-    if has_attention:
-        print(f"\n  Attention Weight Visualization - {model_name}")
-        run_attention_suite(model=best_model, X_test=X_raw_test,
-                            y_test_int=yi_test, model_name=model_name,
-                            save_dir=SAVE_DIR, n_samples=3)
-
-    if model_name == 'Vanilla RNN':
-        print(f"\n  Vanilla RNN result: {best_acc*100:.2f}%")
-        print("  -> Confirms vanishing gradient failure. Do not tune further.")
-
-    summary_results.append({
-        'Model': model_name, 'Best_Acc': best_acc,
-        'Mean_Acc': np.mean(run_accs), 'Std_Acc': np.std(run_accs),
-        'Runs': n_runs,
-        'Notes': ('Attention viz' if has_attention else
-                  'Vanishing gradient case' if model_name == 'Vanilla RNN' else '')
-    })
-    print(f"\n  Summary: Best={best_acc*100:.2f}%  "
-          f"Mean={np.mean(run_accs)*100:.2f}%  +/-{np.std(run_accs)*100:.2f}%")
-
-
-# ── Step 5: Comparison Boxplot ────────────────────────────────────────
-boxplot_data = {k: v for k, v in all_run_accuracies.items()
-                if k != 'Vanilla RNN' and len(v) > 1}
-compare_models_boxplot(boxplot_data,
-                       title='RNN Benchmark - Accuracy Distribution (5 Runs)',
-                       save_dir=SAVE_DIR, filename='RNN_benchmark_boxplot.png')
-
-print_summary_table(summary_results, title='RNN BENCHMARK - FINAL RESULTS')
-save_summary_csv(summary_results, 'RNN_benchmark_results.csv', save_dir=SAVE_DIR)
-
-print("\n  -> Next: 05_CNN_RNN_hybrid.py")
+print("\n✅ RNN benchmark complete. See outputs/ for all saved results.")
+print("Best pure-RNN model: GRU+Attention (~97%)")
+print("Compare against CNN results in 03_CNN_multiscale_final.py (~99.82%)")

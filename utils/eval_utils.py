@@ -53,7 +53,7 @@ def evaluate_model(model, X_test, y_test_onehot, y_test_int,
     os.makedirs(save_dir, exist_ok=True)
     safe_name = model_name.replace(' ', '_').replace('+', '_')
 
-    test_loss, test_acc = model.evaluate(X_test, y_test_onehot, verbose=0)
+    test_loss, test_acc = model.evaluate(X_test, verbose=0)
     print(f"\n{'='*55}")
     print(f"  {model_name}")
     print(f"  Test Accuracy : {test_acc*100:.2f}%")

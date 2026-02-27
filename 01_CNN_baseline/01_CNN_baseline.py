@@ -109,9 +109,11 @@ def build_branch(input_shape=(1000, 1), name=None):
     x   = Flatten()(x)
     return inp, x
 
+INPUT_NAMES = ['input_layer', 'input_layer_1', 'input_layer_2']
+
 branches, model_inputs = [], []
-for i in range(3):
-    inp,out = build_branch(name=f'channel_{i}')
+for name in INPUT_NAMES:
+    inp, out = build_branch(name=name)
     model_inputs.append(inp)
     branches.append(out)
 
@@ -131,13 +133,13 @@ model.summary()
 # ── Step 4: Train ─────────────────────────────────────────────────────
 print("\nStep 4: Training (50 epochs, no EarlyStopping)...")
 history = model.fit(
-    X_train_ch, y_train,
+    X_train_ch,
+    y_train,
     validation_data=(X_test_ch, y_test),
     epochs=EPOCHS,
     batch_size=BATCH_SIZE,
     verbose=1
 )
-
 # ── Step 5: INLINE EVALUATION ─────────────────────────────────────────
 # This block runs IMMEDIATELY after training — not at the bottom of the script.
 print("\nStep 5: Inline evaluation...")

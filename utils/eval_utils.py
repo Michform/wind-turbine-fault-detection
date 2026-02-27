@@ -251,15 +251,19 @@ def gradcam_1d(model, sample_input, class_idx,
         ]
     )
 
-    with tf.GradientTape() as tape:
-        # Cast input to float32 and watch it
-        if isinstance(sample_input, list):
-            inp = [tf.cast(s, tf.float32) for s in sample_input]
-        else:
-            inp = tf.cast(sample_input, tf.float32)
+    # Prepare inputs
+    if isinstance(sample_input, list):
+        inp = [tf.cast(s, tf.float32) for s in sample_input]
+    else:
+        inp = tf.cast(sample_input, tf.float32)
 
+    # Use persistent tape so we can compute gradient after the with-block
+    with tf.GradientTape() as tape:
+        if isinstance(inp, list):
+            [tape.watch(i) for i in inp]
+        else:
+            tape.watch(inp)
         conv_outputs, predictions = grad_model(inp)
-        # Score for target class
         loss = predictions[:, class_idx]
 
     # Gradient of class score w.r.t. last conv layer activations

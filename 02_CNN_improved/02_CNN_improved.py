@@ -113,8 +113,8 @@ def build_improved_model(n_classes: int = 7):
     BatchNorm stabilizes activations, allows learning rate of 1e-4 without
     diverging, and generally speeds up convergence.
     """
-    def build_branch(input_shape=(1000, 1)):
-        inp = Input(shape=input_shape)
+    def build_branch(input_shape=(1000, 1), name=None):
+        inp = Input(shape=input_shape, name=name)
         x   = Conv1D(64, 14, activation='relu')(inp)
         x   = BatchNormalization()(x)
         x   = MaxPooling1D(2)(x)
@@ -131,9 +131,10 @@ def build_improved_model(n_classes: int = 7):
         x   = Flatten()(x)
         return inp, x
 
+    input_names = ['input_layer', 'input_layer_1', 'input_layer_2']
     branches, model_inputs = [], []
-    for _ in range(3):
-        inp, out = build_branch()
+    for name in input_names:
+        inp, out = build_branch(name=name)
         model_inputs.append(inp)
         branches.append(out)
 

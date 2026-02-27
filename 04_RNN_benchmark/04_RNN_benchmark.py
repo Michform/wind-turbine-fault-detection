@@ -100,6 +100,11 @@ X_all, X_test, yi_all, yi_test = train_test_split(
     X, y_int,
     test_size=0.2, stratify=y_int, random_state=RANDOM_STATE
 )
+# Keep the corresponding raw (pre-transposed) test samples for attention plotting
+X_raw_all, X_raw_test, _, _ = train_test_split(
+    X_raw, y_int,
+    test_size=0.2, stratify=y_int, random_state=RANDOM_STATE
+)
 y_test_cat = to_categorical(yi_test, num_classes=7)
 
 print(f"  Training pool: {len(X_all)}  |  Test set: {len(X_test)}")
@@ -356,7 +361,7 @@ for model_name, (builder, n_runs, has_attention) in MODEL_REGISTRY.items():
         print("  Scientific check: do peaks align with fault signal regions?")
         run_attention_suite(
             model      = best_model,
-            X_test     = X_raw,        # shape (N, 3, 1000) — raw for plotting
+            X_test     = X_raw_test,   # shape (N_test, 3, 1000) — raw test subset for plotting
             y_test_int = yi_test,
             model_name = model_name,
             save_dir   = SAVE_DIR,

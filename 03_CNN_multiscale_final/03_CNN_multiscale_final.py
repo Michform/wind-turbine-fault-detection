@@ -101,7 +101,7 @@ print(f"  EarlyStopping will monitor val set ONLY — test set never seen in tra
 
 
 # ── Step 2: Multi-Scale Architecture ─────────────────────────────────
-def build_multiscale_branch(input_shape=(1000, 1)):
+def build_multiscale_branch(input_shape=(1000, 1), name=None):
     """
     Inception-inspired branch for one vibration axis.
 
@@ -118,7 +118,7 @@ def build_multiscale_branch(input_shape=(1000, 1)):
     This design lets early layers learn "what" fault signature looks like
     at multiple scales, and later layers learn "how to classify" from those.
     """
-    inp = Input(shape=input_shape)
+    inp = Input(shape=input_shape, name=name)
 
     # Block 1 — Multi-scale (parallel kernels)
     k3 = Conv1D(32, 3, activation='relu', padding='same')(inp)
@@ -153,9 +153,10 @@ def build_multiscale_branch(input_shape=(1000, 1)):
 
 def build_multiscale_model(n_classes: int = 7):
     """Assemble 3 multi-scale branches for X, Y, Z axes."""
+    input_names = ['input_layer', 'input_layer_1', 'input_layer_2']
     branches, model_inputs = [], []
-    for _ in range(3):
-        inp, out = build_multiscale_branch()
+    for name in input_names:
+        inp, out = build_multiscale_branch(name=name)
         model_inputs.append(inp)
         branches.append(out)
 

@@ -1,0 +1,31 @@
+WIND TURBINE FAULT DETECTION — DATASET ANALYSIS SUMMARY
+============================================================
+File          : Turbine.mat
+Total samples : 14,000
+Input shape   : (3, 1000)  — 3 axes × 1000 timesteps
+Sampling rate : 100,000 Hz
+Window        : 10.0 ms
+Classes       : 7  (Normal + 6 fault types)
+
+CLASS DISTRIBUTION:
+  Normal        2,000 samples  (14.29%)
+  Fault-1       2,000 samples  (14.29%)
+  Fault-2       2,000 samples  (14.29%)
+  Fault-3       2,000 samples  (14.29%)
+  Fault-4       2,000 samples  (14.29%)
+  Fault-5       2,000 samples  (14.29%)
+  Fault-6       2,000 samples  (14.29%)
+
+BALANCE RATIO: 1.00x  (BALANCED)
+
+PER-AXIS STATISTICS (raw, pre-normalization):
+  X: mean=3.5710, std=14.0221, abs_max=119.4069
+  Y: mean=0.1014, std=8.3641, abs_max=124.3151
+  Z: mean=-1.2226, std=5.0451, abs_max=278.2562
+
+DESIGN DECISIONS INFORMED BY THIS ANALYSIS:
+  1. Stratified splits: RECOMMENDED (balance ratio 1.00x)
+  2. Normalization: ESSENTIAL (amplitude ratio across axes: 2.33x)
+  3. Multi-branch architecture: WELL-JUSTIFIED (max inter-axis corr: 0.094)
+  4. Multi-scale kernels: check FFT plot — fault signatures at different frequencies
+  5. Augmentation: recommended for deployment robustness across turbines

@@ -1,0 +1,2 @@
+Model,Best_Acc,Mean_Acc,Std_Acc,Runs,Notes
+CNN Baseline,0.987500011920929,0.987500011920929,0.0,1,"2-way split, no norm, no aug — LEAKY EVALUATION"

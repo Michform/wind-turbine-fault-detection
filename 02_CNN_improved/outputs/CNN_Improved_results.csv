@@ -1,0 +1,2 @@
+Model,Best_Acc,Mean_Acc,Std_Acc,Runs,Notes
+CNN Improved,0.9985714554786682,0.9975237965583801,0.0011818850415767509,5,"3-way split, norm, BatchNorm, aug, EarlyStopping, 5-run"

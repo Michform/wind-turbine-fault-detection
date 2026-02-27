@@ -90,13 +90,13 @@ X_test_ch  = to_channel_inputs(X_test)
 # ── Step 3: Build Model ───────────────────────────────────────────────
 print("Step 3: Building baseline multi-branch CNN...")
 
-def build_branch(input_shape=(1000, 1)):
+def build_branch(input_shape=(1000, 1), name=None):
     """
     Single CNN branch processing one vibration axis.
     4 blocks of Conv1D(64, k=14) → MaxPool(2).
     Fixed kernel size 14 — no multi-scale yet (that's script 03).
     """
-    inp = Input(shape=input_shape)
+    inp = Input(shape=input_shape, name=name)
     x   = Conv1D(64, 14, activation='relu')(inp)
     x   = MaxPooling1D(2)(x)
     x   = Conv1D(64, 14, activation='relu')(x)
@@ -110,8 +110,8 @@ def build_branch(input_shape=(1000, 1)):
     return inp, x
 
 branches, model_inputs = [], []
-for _ in range(3):
-    inp, out = build_branch()
+for i in range(3):
+    inp,out = build_branch(name=f'channel_{i}')
     model_inputs.append(inp)
     branches.append(out)
 

@@ -243,21 +243,18 @@ def augment_training_data(X_train: np.ndarray,
 # 4. Input Format Converters
 # ─────────────────────────────────────────────────────────────────────
 
-def to_channel_inputs(X: np.ndarray) -> list:
+def to_channel_inputs(X: np.ndarray) -> dict:
     """
-    Convert (N, 3, 1000) → list of 3 arrays each shaped (N, 1000, 1).
-
-    Required format for multi-branch CNN where each branch receives
-    one vibration axis independently. Keras multi-input models expect
-    a list of arrays, one per Input() layer.
-
-    Args:
-        X : Feature array, shape (N, 3, 1000).
-
-    Returns:
-        List of 3 arrays, each (N, 1000, 1).
+    Convert (N, 3, 1000) → dict of 3 arrays each shaped (N, 1000, 1).
+    TF 2.19 requires dict input for multi-input models, not a list.
     """
-    return [X[:, i, :].reshape(-1, 1000, 1) for i in range(3)]
+    return {
+        'input_layer':   X[:, 0, :].reshape(-1, 1000, 1),
+        'input_layer_1': X[:, 1, :].reshape(-1, 1000, 1),
+        'input_layer_2': X[:, 2, :].reshape(-1, 1000, 1),
+    }
+
+
 
 
 def to_rnn_input(X: np.ndarray) -> np.ndarray:

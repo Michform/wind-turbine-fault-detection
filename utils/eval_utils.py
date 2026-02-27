@@ -17,7 +17,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from sklearn.metrics import classification_report, confusion_matrix
 import tensorflow as tf
-import keras
+from tensorflow import keras
 
 FAULT_LABELS = ['Normal', 'Fault-1', 'Fault-2', 'Fault-3',
                 'Fault-4', 'Fault-5', 'Fault-6']
